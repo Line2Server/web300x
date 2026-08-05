@@ -1,0 +1,178 @@
+Título: Requisitos e instruções para rodar Line2Server/web300x em um VPS Debian
+
+1) Visão geral
+- Aplicação: PHP (majoritariamente), usa código PHP puro com assets (CSS/JS) e integração Stripe (pasta public/ucp/stripe-php-6.43.1).
+- Recomendação de servidor web: Apache (há .htaccess) — uso mais simples. Nginx+PHP-FPM também possível, mas os exemplos abaixo usam Apache.
+- Ambiente alvo: VPS Debian (ex.: Debian 11/12). Este documento assume acesso root ou sudo.
+
+2) Requisitos de sistema (hardware)
+- CPU: 1 vCPU mínimo (mais para produção).
+- RAM: 1 GB mínimo (2 GB recomendado).
+- Disco: >= 10 GB (depende de logs/dados).
+- Rede: portas 80/443 abertas (HTTP/HTTPS) e porta 3306 se o BD for externo (recomendado restrição por firewall).
+
+3) Requisitos de software (versões recomendadas)
+- Sistema operacional: Debian 11/12.
+- PHP recomendado: 7.4 mínimo; preferível PHP 8.0/8.1/8.2 (melhor segurança/performance).
+- Banco de dados: MariaDB ou MySQL (o config padrão usa 'mariadb').
+- Servidor web: Apache2 (mod_rewrite e .htaccess).
+- Composer (opcional/necessário para gerenciar libs como stripe-php se não vier embarcado).
+- Certbot (para certificados TLS/HTTPS).
+- Git (para clonar o repositório).
+
+4) Extensões PHP necessárias
+- pdo_mysql (via pacote php-mysql) — fornece PDO para MySQL/MariaDB
+- mysqli (se preferir usar driver mysqli)
+- mbstring
+- curl
+- json (normalmente embutido)
+- mbstring
+- xml (php-xml)
+- gd (opcional, para manipulação de imagens)
+- openssl (recomendado para chamadas HTTPS/Stripe)
+Observação: stripe-php composer.json exige "php >= 5.4" e ext-curl/ext-json/ext-mbstring — portanto cheque essas extensões.
+
+5) Comandos de instalação básicos (Debian) — executar como root ou com sudo
+Atualizar:
+- apt update && apt upgrade -y
+
+Instalar Apache, MariaDB, PHP e extensões (exemplo com PHP 8.1):
+- apt install -y apache2 mariadb-server git unzip
+- apt install -y php php-mysql php-curl php-mbstring php-xml php-zip php-intl php-gd php-cli libapache2-mod-php
+Se quiser instalar uma versão específica (8.1), no Debian você pode usar repositório Sury:
+- apt install -y ca-certificates lsb-release apt-transport-https
+- wget -qO- https://packages.sury.org/php/README.txt | bash -x
+- apt update
+- apt install -y php8.1 php8.1-mysql php8.1-curl php8.1-mbstring php8.1-xml php8.1-zip php8.1-intl php8.1-gd libapache2-mod-php8.1
+
+Instalar Composer (opcional):
+- apt install -y composer
+ou instalar manualmente:
+- curl -sS https://getcomposer.org/installer | php
+- mv composer.phar /usr/local/bin/composer
+
+Instalar Certbot (para obter SSL):
+- apt install -y certbot python3-certbot-apache
+
+Habilitar módulos e reiniciar Apache:
+- a2enmod rewrite
+- systemctl restart apache2
+
+6) Criação/Configuração do banco de dados (MySQL/MariaDB)
+Exemplo de comandos:
+- mysql -u root -p
+Dentro do cliente mysql:
+  CREATE DATABASE l2jdb CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+  CREATE USER 'l2user'@'localhost' IDENTIFIED BY 'uma_senha_forte';
+  GRANT ALL PRIVILEGES ON l2jdb.* TO 'l2user'@'localhost';
+  FLUSH PRIVILEGES;
+  EXIT;
+
+Observação: o arquivo private/config/database.php no repositório está com valores padrão:
+  host: 127.0.0.1
+  port: 3306
+  name: l2jdb
+  user: root
+  pass: root
+Edite esses valores para usar o DB/usuário que criou, especialmente NUNCA deixar root/root em produção.
+
+7) Deploy do código (exemplo)
+Supondo que você coloque o site em /var/www/web300x:
+- cd /var/www
+- git clone https://github.com/Line2Server/web300x.git web300x
+- cd /var/www/web300x
+- chown -R www-data:www-data /var/www/web300x
+- chmod -R 750 /var/www/web300x
+(ou ajuste conforme sua política de permissões)
+
+8) Configurar arquivos de configuração da app
+- Editar private/config/database.php com credenciais reais do banco.
+- Revisar private/config/app.php para timezone, nome do app, e outras chaves.
+- Verificar se há outras variáveis de configuração espalhadas (private/; public/ucp/includes etc).
+
+9) Permissões de diretórios
+- Torne graváveis pelo webserver as pastas que a app grava (logs, uploads). Exemplos:
+  chown -R www-data:www-data /var/www/web300x/private/logs
+  chown -R www-data:www-data /var/www/web300x/public/ucp/img
+  chmod -R 750 /var/www/web300x/private
+- Não deixar arquivos de configuração com senhas acessíveis para outros usuários do sistema (permissões 640/600 conforme apropriado).
+
+10) VirtualHost Apache (exemplo)
+Criar /etc/apache2/sites-available/web300x.conf com (ajuste ServerName e DocumentRoot):
+  <VirtualHost *:80>
+    ServerName seu-dominio.com
+    ServerAdmin webmaster@seu-dominio.com
+    DocumentRoot /var/www/web300x
+    <Directory /var/www/web300x>
+      Options Indexes FollowSymLinks
+      AllowOverride All
+      Require all granted
+    </Directory>
+    ErrorLog ${APACHE_LOG_DIR}/web300x_error.log
+    CustomLog ${APACHE_LOG_DIR}/web300x_access.log combined
+  </VirtualHost>
+
+Habilitar e reiniciar:
+- a2ensite web300x
+- systemctl reload apache2
+
+11) Habilitar HTTPS (Certbot + Apache)
+- certbot --apache -d seu-dominio.com
+Siga prompts para obter certificado e redirecionamento automático para HTTPS.
+
+12) Stripe / Pagamentos / Chaves
+- A pasta public/ucp/stripe-php-6.43.1 contém a biblioteca stripe-php. Configure as chaves (test/live) conforme a lógica da aplicação — procure nos arquivos em public/ucp por onde as credenciais são lidas (p.ex. private/config ou variáveis definidas).
+- Em produção, usar HTTPS obrigatoriamente.
+- Teste em modo sandbox (Stripe test keys) antes de mover para produção.
+
+13) Composer / dependências PHP
+- Se precisar atualizar libs:
+  cd public/ucp/stripe-php-6.43.1
+  composer install
+- Caso a aplicação espere libs em vendor/, garanta executar composer install no diretório correto.
+
+14) Firewall (ufw exemplo)
+- apt install -y ufw
+- ufw allow OpenSSH
+- ufw allow 'Apache Full'   # permite 80 e 443
+- ufw enable
+
+15) Serviços para habilitar no boot
+- systemctl enable apache2
+- systemctl enable mariadb
+
+16) Backup / Logs / Monitoramento (recomendado)
+- Configure rotação de logs via logrotate (ex.: /etc/logrotate.d/web300x).
+- Backup regular do banco de dados (mysqldump) e arquivos persistentes.
+- Monitoramento básico (monit, netdata, ou ferramentas semelhantes).
+
+17) Checklist rápido de pós-instalação
+- [ ] Editar private/config/database.php com credenciais seguras.
+- [ ] Alterar quaisquer credenciais padrão (root/root).
+- [ ] Configurar VirtualHost e habilitar HTTPS.
+- [ ] Garantir permissões corretas nos diretórios que precisam gravar.
+- [ ] Instalar todas as extensões PHP listadas.
+- [ ] Rodar composer install se necessário.
+- [ ] Testar login, cadastro e fluxos que dependem de DB e pagamentos.
+- [ ] Remover ou proteger arquivos sensíveis (logs com credenciais antigas etc).
+
+18) Comandos úteis de troubleshooting
+- Ver logs Apache: tail -f /var/log/apache2/error.log
+- Ver logs da aplicação (private/logs): tail -f /var/www/web300x/private/logs/*.log
+- Testar conexão DB: php -r "new PDO('mysql:host=127.0.0.1;dbname=l2jdb','l2user','senha'); echo 'OK';"
+- Ver módulos PHP carregados: php -m
+- Reiniciar serviços: systemctl restart apache2 && systemctl restart mariadb
+
+19) Observações de segurança
+- Não deixar credenciais padrão no repositório público; use variáveis de ambiente ou arquivos fora do DocumentRoot.
+- Use senhas fortes para DB e contas administrativas.
+- Habilite TLS/HTTPS em produção.
+- Aplique updates regulares do sistema e do PHP.
+
+20) Itens opcionais / avançados
+- Considerar Nginx + PHP-FPM para maior performance.
+- Usar fail2ban para proteção SSH/serviços.
+- Colocar BD em servidor separado para maior segurança e performance.
+- Usar uma conta não-root para deploy e automação CI/CD.
+
+Fim do arquivo.
